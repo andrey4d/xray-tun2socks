@@ -1,0 +1,76 @@
+#!/bin/sh
+
+XRAY_CONFIG="${HOME}/.vpn/vless_config.json"
+
+SOCKS5_SERVER="localhost"
+SOCKS5_PORT="1080"
+
+TUN_ADDRESS="172.16.0.1"
+
+LOG_DIR="${HOME}/tun2socks"
+TUN2SOCKS="/usr/local/bin/tun2socks-darwin-arm64"
+
+NETS="1.0.0.0/8 2.0.0.0/7 4.0.0.0/6 8.0.0.0/5 16.0.0.0/4 32.0.0.0/3 64.0.0.0/2 128.0.0.0/1"
+
+SUDO="sudo"
+
+XRAY_IP=$(jq -r '.outbounds[].settings | .vnext[]? | .address' ${XRAY_CONFIG})
+
+if ! expr "$XRAY_IP" : '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$' >/dev/null; then
+  XRAY_IP=$(dig +short ${XRAY_IP})  
+fi
+
+
+DEF_GATE=$(netstat -rn| grep 'default'|grep 'en0' | awk '{print$2}') # This will output your default gateway ip address . if command fails try finding the deault gateway ip by using 'ip r' command
+
+echo "Server IP ${XRAY_IP}"
+echo "Default gatawey ${DEF_GATE}"
+
+if [ ! -d ${LOG_DIR} ]; then
+    mkdir "${LOG_DIR}"
+fi
+
+
+function tun_route() {
+    local COMMAND="$1"
+    
+    if [ $COMMAND == "add" ]; then
+        ${SUDO} ifconfig utun${SOCKS5_PORT} ${TUN_ADDRESS} netmask 255.255.255.240 ${TUN_ADDRESS} up
+    fi
+
+    echo "${COMMAND} route ${XRAY_IP}/32 to ${TUN_ADDRESS}."
+    ${SUDO} route ${COMMAND} ${XRAY_IP}/32 ${DEF_GATE} 1>/dev/null 2>&1
+
+    for NET in ${NETS} 
+    do
+        echo "${COMMAND} route ${NET} to ${TUN_ADDRESS}."
+        ${SUDO} route ${COMMAND} -net ${NET} ${TUN_ADDRESS} 1>/dev/null 2>&1
+    done
+}
+
+# trap ctrl-c and call stop()
+trap ctl_c INT
+
+function ctl_c() {
+    echo "** Trapped CTRL-C"
+    tun_route delete
+
+    ${SUDO} killall tun2socks 1>/dev/null 2>&1
+    killall xray 1>/dev/null 2>&1
+
+    echo "Done."
+}
+
+
+echo "Run xray."
+xray -config ${XRAY_CONFIG} > ${LOG_DIR}/xray.log &
+echo $! >   ${LOG_DIR}/xray.pid
+sleep 3
+
+${SUDO} echo "Run tun2socks to ${SOCKS5_SERVER}:${SOCKS5_PORT}"
+${SUDO} ${TUN2SOCKS} -device utun${SOCKS5_PORT} -proxy socks5://${SOCKS5_SERVER}:${SOCKS5_PORT} -interface lo0 > ${LOG_DIR}/tune2sokcs.log &
+echo $! >   ${LOG_DIR}/tun2socks.pid
+
+sleep 3
+tun_route add
+tail -f ${LOG_DIR}/xray.log
