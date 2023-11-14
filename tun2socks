@@ -25,7 +25,7 @@ fi
 DEF_GATE=$(netstat -rn| grep 'default'|grep 'en0' | awk '{print$2}') # This will output your default gateway ip address . if command fails try finding the deault gateway ip by using 'ip r' command
 
 echo "Server IP ${XRAY_IP}"
-echo "Default gatawey ${DEF_GATE}"
+echo "Default gatewey ${DEF_GATE}"
 
 if [ ! -d ${LOG_DIR} ]; then
     mkdir "${LOG_DIR}"
